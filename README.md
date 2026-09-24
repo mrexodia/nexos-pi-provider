@@ -7,7 +7,7 @@ API-key login and automatic model discovery for [Nexos](https://nexos.ai). Model
 ```sh
 pi install git:github.com/mrexodia/nexos-pi-provider
 # or
-omp install git:github.com/mrexodia/nexos-pi-provider
+omp install github:mrexodia/nexos-pi-provider
 ```
 
 Restart your agent, then run `/login nexos` and `/model`. Alternatively, set `NEXOS_API_KEY` before launching. `.env` files are not loaded automatically.
