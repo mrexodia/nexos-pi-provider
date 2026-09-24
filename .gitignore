@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+*.tgz
+coverage/
+
+# Local API experiments and downloaded model catalogs
+/models*.json
+/*.http
+/info.txt

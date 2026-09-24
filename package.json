@@ -1,0 +1,58 @@
+{
+  "name": "pi-nexos-provider",
+  "version": "0.1.0",
+  "description": "Authenticated Nexos model discovery and readable model selection for pi and OMP",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "omp-package",
+    "nexos",
+    "pi-provider"
+  ],
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "omp": {
+    "extensions": [
+      "./src/omp.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@oh-my-pi/pi-ai": "*",
+    "@oh-my-pi/pi-catalog": "*",
+    "@oh-my-pi/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": { "optional": true },
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "@oh-my-pi/pi-ai": { "optional": true },
+    "@oh-my-pi/pi-catalog": { "optional": true },
+    "@oh-my-pi/pi-coding-agent": { "optional": true }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@oh-my-pi/pi-ai": "^18.3.0",
+    "@oh-my-pi/pi-catalog": "^18.3.0",
+    "@oh-my-pi/pi-coding-agent": "^18.3.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/catalog.test.ts test/provider.test.ts test/runtime.test.ts && bun test test/omp.test.ts",
+    "test:omp": "bun test test/omp.test.ts"
+  }
+}
