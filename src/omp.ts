@@ -9,6 +9,7 @@ import type {
 import {
   BASE_URL,
   fetchCatalog,
+  isRoutingId,
   nexosCompat,
   readApiPreference,
   type ApiPreference,
@@ -41,8 +42,13 @@ export function readOmpRoute(baseUrl: string): NexosRoute {
   }
   const separator = hash.indexOf(":", ROUTE_PREFIX.length);
   const api = hash.slice(ROUTE_PREFIX.length, separator) as NexosApi;
-  const model = hash.slice(separator + 1);
-  if ((api !== "openai-completions" && api !== "openai-responses") || !/^[0-9a-f-]{36}$/i.test(model)) {
+  let model: string;
+  try {
+    model = decodeURIComponent(hash.slice(separator + 1));
+  } catch {
+    throw new Error("Nexos model routing metadata is invalid. Run /nexos-refresh.");
+  }
+  if (separator < 0 || (api !== "openai-completions" && api !== "openai-responses") || !isRoutingId(model)) {
     throw new Error("Nexos model routing metadata is invalid. Run /nexos-refresh.");
   }
   return { api, model };
@@ -50,14 +56,14 @@ export function readOmpRoute(baseUrl: string): NexosRoute {
 
 export function toOmpModel(model: NexosModel): OmpModelConfig {
   const wireId = model.samplingParams?.model;
-  if (typeof wireId !== "string" || !/^[0-9a-f-]{36}$/i.test(wireId)) {
+  if (!isRoutingId(wireId)) {
     throw new Error("Nexos model routing metadata is missing.");
   }
   return {
     id: model.id,
     name: model.name,
     api: OMP_API,
-    baseUrl: `${BASE_URL}#${ROUTE_PREFIX}${model.api}:${wireId}`,
+    baseUrl: `${BASE_URL}#${ROUTE_PREFIX}${model.api}:${encodeURIComponent(wireId)}`,
     reasoning: model.reasoning,
     input: [...model.input],
     cost: { ...model.cost },

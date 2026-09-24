@@ -37,7 +37,64 @@ test("non-chat models are excluded, malformed/partial catalogs rejected", () => 
   assert.deepEqual(parseCatalog(payload(...["embeddings", "image_generation", "speech_generation", "systemone"].map(e => ({ ...row, endpoints: [e] })))), []);
   for (const value of [null, [], {}, { data: {} }]) assert.throws(() => parseCatalog(value), /invalid model catalog/);
   assert.throws(() => parseCatalog({ data: [row], total: 3 }), /partial catalog/);
-  assert.throws(() => parseCatalog(payload({ ...row, nexos_model_id: undefined })), /nexos_model_id/);
+  assert.throws(() => parseCatalog(payload({ ...row, nexos_model_id: undefined, id: undefined })), /nexos_model_id or id/);
+});
+
+test("accepts opaque Nexos routing IDs and prefers them over id (#1)", () => {
+  for (const wireId of ["auto-code", "GPT 4.1 mini", "vendor/model:custom#100%", "モデル"]) {
+    const [model] = parseCatalog(payload({ ...row, nexos_model_id: wireId, id: "different-route" }));
+    assert.equal(model.samplingParams?.model, wireId);
+  }
+});
+
+test("falls back to id, never to the display name", () => {
+  for (const nexos_model_id of [undefined, null, "", "   ", 42, "bad\nid"]) {
+    const [model] = parseCatalog(payload({ ...row, nexos_model_id, id: "auto-code", name: "Friendly Auto Code" }));
+    assert.equal(model.samplingParams?.model, "auto-code");
+    assert.equal(model.id, "friendly-auto-code/us");
+  }
+  assert.throws(() => parseCatalog(payload({ ...row, nexos_model_id: null, id: null, name: "auto-code" })), /nexos_model_id or id/);
+});
+
+test("opaque routing IDs get safe deterministic collision suffixes", () => {
+  const models = parseCatalog(payload(
+    { ...row, nexos_model_id: "vendor/model:one#100%" },
+    { ...row, nexos_model_id: "vendor/model:two#100%" },
+  ));
+  assert.equal(new Set(models.map(m => m.id)).size, 2);
+  assert.ok(models.every(m => /^claude-fable-5\/google-agent-platform\/us~[0-9a-f]{8}$/.test(m.id)));
+  assert.deepEqual(models, parseCatalog(payload(
+    { ...row, nexos_model_id: "vendor/model:two#100%" },
+    { ...row, nexos_model_id: "vendor/model:one#100%" },
+  )));
+});
+
+test("one unusable routing ID does not block the rest of the catalog (#1)", () => {
+  const warnings: string[] = [];
+  const invalid = [undefined, null, "", "   ", 42, {}, "\u0000", "bad\nid", row.nexos_model_id.replace("-", "\u001b-")];
+  const models = parseCatalog(payload(
+    ...invalid.map(nexos_model_id => ({ ...row, nexos_model_id, id: undefined })),
+    row,
+  ), "auto", message => warnings.push(message));
+  assert.deepEqual(models, parseCatalog(payload(row)));
+  assert.deepEqual(warnings, ["Skipped 9 Nexos chat model(s) without a usable nexos_model_id or id; loaded 1 usable model(s)."]);
+  assert.ok(!warnings[0].includes(row.nexos_model_id));
+});
+
+test("an entirely unusable chat catalog reports a format error, not an auth error", () => {
+  assert.throws(() => parseCatalog(payload({ ...row, nexos_model_id: null, id: undefined })), /catalog-format problem, not an API-key rejection/);
+  assert.deepEqual(parseCatalog(payload()), []);
+  assert.deepEqual(parseCatalog(payload({ ...row, endpoints: ["embeddings"], nexos_model_id: null })), []);
+});
+
+test("authenticated discovery returns usable models and warns once for skipped entries", async () => {
+  const warnings: string[] = [];
+  const models = await fetchCatalog("secret", new AbortController().signal, "auto", async () => Response.json(payload(
+    row, { ...row, nexos_model_id: null, id: undefined },
+  )), message => warnings.push(message));
+  assert.deepEqual(models, parseCatalog(payload(row)));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Skipped 1/);
 });
 
 test("includes the host only where model and region are ambiguous", () => {

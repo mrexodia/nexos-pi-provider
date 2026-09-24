@@ -9,12 +9,17 @@ const catalog = { data: [{
   owned_by: "Host", region: "EU", context_length: 8192, max_tokens: 1024,
 }] };
 
-for (const preference of ["completions", "responses"] as const) {
-  test(`OMP ${preference} discovery, login staging, and UUID routing`, async () => {
+for (const [field, wireId] of [
+  ["nexos_model_id", uuid],
+  ["nexos_model_id", "auto-code"],
+  ["id", "auto-code"],
+  ["id", "Vendor/Model (1):100%#モデル"],
+] as const) for (const preference of ["completions", "responses"] as const) {
+  test(`OMP ${preference} discovery, login staging, and ${field}=${wireId} routing`, async () => {
     let discoveryCalls = 0;
     const config = createOmpProviderConfig({ preference, fetcher: async () => {
       discoveryCalls++;
-      return Response.json(catalog);
+      return Response.json({ data: [{ ...catalog.data[0], nexos_model_id: undefined, [field]: wireId }] });
     } });
     assert.equal(config.apiKey, "NEXOS_API_KEY");
     assert.equal(config.baseUrl, undefined, "a provider-wide URL would erase per-model routing metadata");
@@ -37,7 +42,7 @@ for (const preference of ["completions", "responses"] as const) {
     assert.equal(models[0].id, "omp-test/eu");
     assert.deepEqual(readOmpRoute(models[0].baseUrl!), {
       api: preference === "completions" ? "openai-completions" : "openai-responses",
-      model: uuid,
+      model: wireId,
     });
 
     let payload: Record<string, unknown> | undefined;
@@ -68,7 +73,7 @@ for (const preference of ["completions", "responses"] as const) {
       },
     );
     const message = await stream.result();
-    assert.equal(payload?.model, uuid);
+    assert.equal(payload?.model, wireId);
     assert.ok(requestUrl.endsWith(preference === "completions" ? "/chat/completions" : "/responses"));
     assert.equal(message.model, models[0].id);
     assert.equal(message.stopReason, "stop", message.errorMessage);
@@ -77,5 +82,8 @@ for (const preference of ["completions", "responses"] as const) {
 
 test("OMP rejects missing or malformed routing metadata", () => {
   assert.throws(() => readOmpRoute("https://api.nexos.ai/v1"), /routing metadata is missing/);
-  assert.throws(() => readOmpRoute("https://api.nexos.ai/v1#nexos:openai-responses:not-a-uuid"), /routing metadata is invalid/);
+  for (const route of ["openai-responses:", "openai-responses:%ZZ", "openai-responses:bad%0Aid", "unknown:auto-code", "openai-responses"]) {
+    assert.throws(() => readOmpRoute(`https://api.nexos.ai/v1#nexos:${route}`), /routing metadata is invalid/);
+  }
+  assert.deepEqual(readOmpRoute(`https://api.nexos.ai/v1#nexos:openai-responses:${uuid}`), { api: "openai-responses", model: uuid });
 });

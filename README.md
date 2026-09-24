@@ -1,6 +1,6 @@
 # Nexos provider for pi & Oh My Pi
 
-API-key login and automatic model discovery for [Nexos](https://nexos.ai). Models use readable names like `glm-5.3-flash/eu`; host and UUID qualifiers are added only when needed to distinguish deployments.
+API-key login and automatic model discovery for [Nexos](https://nexos.ai). Models use readable names like `glm-5.3-flash/eu`; host and ID qualifiers are added only when needed to distinguish deployments.
 
 ## Install
 
@@ -15,7 +15,7 @@ Restart your agent, then run `/login nexos` and `/model`. Alternatively, set `NE
 - `/nexos-refresh` refreshes the authenticated model list.
 - Text-only for now; non-chat models are excluded.
 - Chat Completions is preferred by default. Set `NEXOS_API=responses` to prefer Responses when available.
-- Requests use the full Nexos model UUID, not the displayed alias.
+- Requests use `nexos_model_id`, falling back to `id`, not the displayed alias. Routing IDs can be arbitrary strings (including `auto-code`), not just UUIDs.
 
 ## Development
 

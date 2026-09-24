@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Model } from "@earendil-works/pi-ai";
 
 export const BASE_URL = "https://api.nexos.ai/v1";
@@ -21,6 +22,17 @@ export function nexosCompat(api: NexosApi): NexosModel["compat"] {
     supportsStrictMode: false,
     maxTokensField: "max_tokens",
   } : { supportsStrictMode: false };
+}
+
+/** Catalog routing IDs are opaque strings, not necessarily UUIDs. */
+export function isRoutingId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && !/[\p{Cc}\p{Cf}]/u.test(value);
+}
+
+function routingSuffix(id: string): string {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    ? id.toLowerCase()
+    : createHash("sha256").update(id).digest("hex");
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -54,7 +66,11 @@ function perMillion(value: unknown): number {
 }
 
 /** Do not guess capabilities from names: endpoints are authoritative. */
-export function parseCatalog(payload: unknown, preference: ApiPreference = "auto"): NexosModel[] {
+export function parseCatalog(
+  payload: unknown,
+  preference: ApiPreference = "auto",
+  onWarning?: (message: string) => void,
+): NexosModel[] {
   const root = record(payload);
   if (!root || !Array.isArray(root.data)) throw new Error("Nexos returned an invalid model catalog (expected data array).");
   if (typeof root.total === "number" && root.total > root.data.length) {
@@ -63,6 +79,7 @@ export function parseCatalog(payload: unknown, preference: ApiPreference = "auto
   const models: NexosModel[] = [];
   const hostedAliases = new Map<NexosModel, string>();
   const seen = new Set<string>();
+  let skippedIds = 0;
   for (const value of root.data) {
     const row = record(value);
     if (!row) continue;
@@ -70,12 +87,16 @@ export function parseCatalog(payload: unknown, preference: ApiPreference = "auto
     const chat = endpoints.includes("chat_completion");
     const responses = endpoints.includes("responses");
     if (!chat && !responses) continue;
-    const uuid = text(row.nexos_model_id);
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
-      throw new Error("Nexos chat model has a missing or invalid nexos_model_id.");
+    // Prefer the Nexos-specific route; OpenAI's standard `id` also works.
+    // Never substitute `name` or sanitize an ID into a different wire value.
+    const wireId = isRoutingId(row.nexos_model_id) ? row.nexos_model_id
+      : isRoutingId(row.id) ? row.id : undefined;
+    if (wireId === undefined) {
+      skippedIds++;
+      continue;
     }
-    if (seen.has(uuid)) continue;
-    seen.add(uuid);
+    if (seen.has(wireId)) continue;
+    seen.add(wireId);
     const name = cleanName(text(row.name) || text(row.id)) || "Unnamed model";
     const owner = text(row.owned_by) || "Unknown host";
     const region = text(row.region) || "Unknown region";
@@ -100,11 +121,21 @@ export function parseCatalog(payload: unknown, preference: ApiPreference = "auto
         cacheWrite: perMillion(pricing.cache_write_cost_per_token),
       },
       // Kept on the model so pi's normal modelOverrides composition preserves routing.
-      samplingParams: { model: uuid },
+      samplingParams: { model: wireId },
       compat: nexosCompat(api),
     };
     models.push(model);
     hostedAliases.set(model, `${slug(name)}/${slug(owner)}/${slug(region)}`);
+  }
+  if (skippedIds > 0) {
+    if (models.length === 0) {
+      throw new Error(
+        `Nexos returned ${skippedIds} chat model(s), but none have a usable nexos_model_id or id. ` +
+        "This is a catalog-format problem, not an API-key rejection. Please report a redacted model entry.",
+      );
+    }
+    // Counts only: never echo account-specific catalog rows or credentials.
+    onWarning?.(`Skipped ${skippedIds} Nexos chat model(s) without a usable nexos_model_id or id; loaded ${models.length} usable model(s).`);
   }
   // Region is usually enough. Include the host only for ambiguous regional aliases.
   const counts = new Map<string, number>();
@@ -117,14 +148,15 @@ export function parseCatalog(payload: unknown, preference: ApiPreference = "auto
   for (const model of models) counts.set(model.id, (counts.get(model.id) ?? 0) + 1);
   for (const model of models) {
     if (counts.get(model.id)! > 1) {
-      model.id += `~${String(model.samplingParams!.model).slice(0, 8).toLowerCase()}`;
+      model.id += `~${routingSuffix(String(model.samplingParams!.model)).slice(0, 8)}`;
     }
   }
-  // Never silently conflate two deployments, even with a colliding UUID prefix.
+  // Never conflate deployments with colliding short suffixes. Non-UUID IDs use
+  // hashes so spaces, slashes, etc. cannot leak into the readable alias.
   counts.clear();
   for (const model of models) counts.set(model.id, (counts.get(model.id) ?? 0) + 1);
   for (const model of models) {
-    if (counts.get(model.id)! > 1) model.id = model.id.replace(/~[^~]+$/, `~${model.samplingParams!.model}`);
+    if (counts.get(model.id)! > 1) model.id = model.id.replace(/~[^~]+$/, `~${routingSuffix(String(model.samplingParams!.model))}`);
   }
   return models.sort((a, b) => a.id.localeCompare(b.id, "en"));
 }
@@ -134,6 +166,7 @@ export async function fetchCatalog(
   signal: AbortSignal,
   preference: ApiPreference = "auto",
   fetcher: typeof fetch = fetch,
+  onWarning: (message: string) => void = message => console.warn(`[nexos] ${message}`),
 ): Promise<NexosModel[]> {
   if (!key.trim()) throw new Error("Nexos requires an API key. Run /login nexos or set NEXOS_API_KEY.");
   const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
@@ -165,5 +198,5 @@ export async function fetchCatalog(
     throw new Error(boundedSignal.aborted ? "Nexos model discovery timed out." : "Nexos returned invalid JSON for its model catalog.");
   }
   boundedSignal.throwIfAborted();
-  return parseCatalog(payload, preference);
+  return parseCatalog(payload, preference, onWarning);
 }

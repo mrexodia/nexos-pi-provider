@@ -60,6 +60,19 @@ test("login uses a secret prompt, validates, then publishes on credential synchr
   assert.equal(h.provider.getModels().length, 1);
 });
 
+test("pi login accepts valid models alongside an unusable catalog entry (#1)", async () => {
+  const provider = nexosProvider({ envKey: () => undefined, fetcher: async () => Response.json({
+    data: [...catalog.data, { ...catalog.data[0], nexos_model_id: null }],
+  }) });
+  const saved = await provider.auth.apiKey!.login!({
+    signal: new AbortController().signal, notify() {}, async prompt() { return "test-key"; },
+  });
+  assert.deepEqual(saved, credential);
+  await provider.refreshModels!(refreshContext({ credential: saved, allowNetwork: false }));
+  assert.equal(provider.getModels().length, 1);
+  assert.equal(provider.getModels()[0].samplingParams?.model, uuid);
+});
+
 test("credential changes and rejected publications cannot expose another account's models", async () => {
   const h = harness();
   await h.provider.refreshModels!(refreshContext({ async publish() { return false; } }));
@@ -102,9 +115,16 @@ test("pi-ai runtime performs authenticated refresh and hides models on logout", 
   assert.equal(h.provider.getModels().length, 0);
 });
 
-for (const preference of ["completions", "responses"] as const) {
-  test(`${preference} transport sends full Nexos UUID while preserving readable model identity`, async () => {
-    const provider = nexosProvider({ preference, envKey: () => undefined, fetcher: async () => Response.json(catalog) });
+for (const [field, wireId] of [
+  ["nexos_model_id", uuid],
+  ["nexos_model_id", "auto-code"],
+  ["id", "auto-code"],
+  ["id", "Vendor/Model (1):100%#モデル"],
+] as const) for (const preference of ["completions", "responses"] as const) {
+  test(`${preference} transport sends ${field}=${wireId} while preserving readable model identity`, async () => {
+    const provider = nexosProvider({ preference, envKey: () => undefined, fetcher: async () => Response.json({
+      data: [{ ...catalog.data[0], nexos_model_id: undefined, [field]: wireId }],
+    }) });
     await provider.refreshModels!(refreshContext());
     const model = provider.getModels()[0];
     let captured: Record<string, unknown> | undefined;
@@ -133,7 +153,7 @@ for (const preference of ["completions", "responses"] as const) {
         return new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "Content-Type": "text/event-stream" } });
       },
     }).result();
-    assert.equal(captured?.model, uuid);
+    assert.equal(captured?.model, wireId);
     assert.equal(captured?.temperature, 0.1);
     assert.ok(requestUrl.endsWith(preference === "completions" ? "/chat/completions" : "/responses"));
     assert.equal(message.model, model.id);

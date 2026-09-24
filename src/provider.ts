@@ -8,7 +8,7 @@ import {
   type StreamOptions,
 } from "@earendil-works/pi-ai";
 import { completionsApi, responsesApi } from "./apis.ts";
-import { BASE_URL, fetchCatalog, type ApiPreference, type NexosApi, type NexosModel } from "./catalog.ts";
+import { BASE_URL, fetchCatalog, isRoutingId, type ApiPreference, type NexosApi, type NexosModel } from "./catalog.ts";
 
 const CACHE_MS = 5 * 60_000;
 const fingerprint = (key: string) => createHash("sha256").update(key).digest("hex");
@@ -27,7 +27,7 @@ function routedApi(api: ProviderStreams): ProviderStreams {
     async onPayload(payload, callbackModel) {
       if (!options?.apiKey?.trim()) throw new Error("Nexos requires an API key. Run /login nexos.");
       const wireId = model.samplingParams?.model;
-      if (typeof wireId !== "string" || !/^[0-9a-f-]{36}$/i.test(wireId)) {
+      if (!isRoutingId(wireId)) {
         throw new Error("Nexos model routing metadata is missing. Run /nexos-refresh.");
       }
       const next = await options?.onPayload?.(payload, callbackModel) ?? payload;
