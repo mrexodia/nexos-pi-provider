@@ -28,6 +28,7 @@ type NexosRoute = { api: NexosApi; model: string };
 export interface OmpProviderOptions {
   preference?: ApiPreference;
   fetcher?: typeof fetch;
+  envKey?: () => string | undefined;
 }
 
 export function readOmpRoute(baseUrl: string): NexosRoute {
@@ -93,12 +94,17 @@ const routedStreamSimple: OmpStreamSimple = (model, context, options) => {
 export function createOmpProviderConfig(options: OmpProviderOptions = {}): ProviderConfigInput {
   const preference = options.preference ?? readApiPreference();
   const fetcher = options.fetcher ?? fetch;
+  const envKey = options.envKey ?? (() => process.env.NEXOS_API_KEY);
   let pendingLogin: { keyHash: string; models: OmpModelConfig[] } | undefined;
   const load = async (key: string, signal: AbortSignal) =>
     (await fetchCatalog(key, signal, preference, fetcher)).map(toOmpModel);
 
   return {
-    apiKey: "NEXOS_API_KEY",
+    // OMP treats apiKey as a highest-priority config override. Registering the
+    // env-var name while it is unset shadows a key saved by /login with the
+    // literal string "NEXOS_API_KEY", so only install the override when the
+    // environment actually supplies a value.
+    ...(envKey()?.trim() ? { apiKey: "NEXOS_API_KEY" } : {}),
     api: OMP_API,
     streamSimple: routedStreamSimple,
     oauth: {

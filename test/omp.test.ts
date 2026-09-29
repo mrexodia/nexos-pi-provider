@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import type { Context, Model } from "@oh-my-pi/pi-ai";
+import { AuthStorage, type Context, type Model } from "@oh-my-pi/pi-ai";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { createOmpProviderConfig, readOmpRoute } from "../src/omp.ts";
 
 const uuid = "12345678-1234-1234-1234-123456789abc";
@@ -17,11 +21,11 @@ for (const [field, wireId] of [
 ] as const) for (const preference of ["completions", "responses"] as const) {
   test(`OMP ${preference} discovery, login staging, and ${field}=${wireId} routing`, async () => {
     let discoveryCalls = 0;
-    const config = createOmpProviderConfig({ preference, fetcher: async () => {
+    const config = createOmpProviderConfig({ preference, envKey: () => undefined, fetcher: async () => {
       discoveryCalls++;
       return Response.json({ data: [{ ...catalog.data[0], nexos_model_id: undefined, [field]: wireId }] });
     } });
-    assert.equal(config.apiKey, "NEXOS_API_KEY");
+    assert.equal(config.apiKey, undefined);
     assert.equal(config.baseUrl, undefined, "a provider-wide URL would erase per-model routing metadata");
     assert.deepEqual(await config.fetchDynamicModels!(undefined), []);
     assert.equal(discoveryCalls, 0);
@@ -79,6 +83,46 @@ for (const [field, wireId] of [
     assert.equal(message.stopReason, "stop", message.errorMessage);
   });
 }
+
+test("OMP only installs the environment override when NEXOS_API_KEY is set", () => {
+  assert.equal(createOmpProviderConfig({ envKey: () => undefined }).apiKey, undefined);
+  assert.equal(createOmpProviderConfig({ envKey: () => "  " }).apiKey, undefined);
+  assert.equal(createOmpProviderConfig({ envKey: () => "env-key" }).apiKey, "NEXOS_API_KEY");
+});
+
+test("OMP login key remains visible to dynamic discovery", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "nexos-omp-runtime-test-"));
+  const provider = "nexos-login-runtime-test";
+  const auth = await AuthStorage.create(join(dir, "agent.db"));
+  const registry = new ModelRegistry(auth, join(dir, "models.yml"), { cacheDbPath: join(dir, "models.db") });
+  try {
+    let discoveryCalls = 0;
+    const config = createOmpProviderConfig({
+      envKey: () => undefined,
+      fetcher: async (_url, init) => {
+        discoveryCalls++;
+        assert.equal(new Headers(init?.headers).get("authorization"), "Bearer test-key");
+        return Response.json(catalog);
+      },
+    });
+    registry.registerProvider(provider, config, "nexos-login-runtime-test-source");
+
+    await auth.oauth.login(provider, {
+      signal: new AbortController().signal,
+      onAuth() {},
+      async onPrompt() { return "test-key"; },
+    });
+    await registry.refreshProvider(provider, "online");
+
+    assert.equal(discoveryCalls, 1, "post-login refresh should consume the staged catalog");
+    assert.equal(registry.getProviderModels(provider).length, 1);
+    assert.equal(registry.getAvailable().filter(model => model.provider === provider).length, 1);
+  } finally {
+    registry.unregisterProvider(provider);
+    auth.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("OMP rejects missing or malformed routing metadata", () => {
   assert.throws(() => readOmpRoute("https://api.nexos.ai/v1"), /routing metadata is missing/);
